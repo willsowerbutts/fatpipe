@@ -1,0 +1,10 @@
+#!/bin/bash
+
+make clean
+make -j
+cp fatpipe.com crcfile.com /tmp/
+make clean
+cp /tmp/fatpipe.com /tmp/crcfile.com .
+cd ..
+rm -f fatpipe-RELEASE.zip
+zip -9r fatpipe-RELEASE.zip fatpipe/ --exclude fatpipe/.git/\* --exclude fatpipe/build-release

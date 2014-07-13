@@ -1,0 +1,92 @@
+#!/usr/bin/env python
+
+import serial
+import time
+import struct
+import sys
+import zlib
+import os
+
+MSG_MAGIC = 0x16A5
+MSG_CODE_HELLO     = 1
+MSG_CODE_FILEINFO  = 2
+MSG_CODE_SENDBLOCK = 3
+MSG_CODE_SENDCRC   = 4
+MSG_CODE_FILEDONE  = 5
+CPM_BLOCK_SIZE = 128
+
+class FatPipe:
+    def __init__(self, device, baudrate):
+        self.port = serial.Serial(device, baudrate=baudrate, 
+                bytesize=serial.EIGHTBITS, parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE, xonxoff=False, rtscts=False)
+
+    def receive_msg(self):
+        sync = ''
+        while sync != '\xa5\x16':
+            sync = sync[-1:] + self.port.read(1)
+            # print "sync = %02x" % ord(sync[-1])
+        message = self.port.read(6)
+        data0, data1, data2 = struct.unpack("<HHH", message)
+        return (data0, data1, data2)
+
+    def send_msg(self, bytes):
+        self.port.write(bytes)
+
+CPM_VALID_CHARS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$&+-@^{}'
+def cpm_string(s):
+    return ''.join(filter(lambda x: x in CPM_VALID_CHARS, s))
+
+def make_cpm_filename(filename):
+    filename = os.path.basename(filename + ".").upper().replace("_", "-").split('.', 1)
+    return '%s.%s' % (cpm_string(filename[0])[:8], cpm_string(filename[1])[:3])
+
+current_file = 0
+pipe = FatPipe("/dev/ttyUSB1", 576000)
+files_to_send = sys.argv[1:]
+
+while 1:
+    code, data1, data2 = pipe.receive_msg()
+    if code == MSG_CODE_HELLO:
+        print "Receiver says hello"
+        current_file = 0
+    elif code == MSG_CODE_FILEINFO:
+        if current_file < len(files_to_send):
+            current_fd = open(files_to_send[current_file], 'rb')
+        else:
+            current_fd = None
+        if current_fd == None:
+            cpm_filename = ''
+            blocks = 0
+            print "End of file list"
+        else:
+            cpm_filename = make_cpm_filename(files_to_send[current_file])
+            print "Sending %s as %s" % (files_to_send[current_file], cpm_filename)
+            current_fd.seek(0, 2) # seek to end
+            blocks = (current_fd.tell() + CPM_BLOCK_SIZE - 1) // CPM_BLOCK_SIZE
+            current_fd.seek(0) # seek to start
+        crc = 0
+        reply = struct.pack("<H16sH", MSG_MAGIC, cpm_filename, blocks)
+        # compute and append CRC32
+        reply = reply + struct.pack("<I", (zlib.crc32(reply) & 0xFFFFFFFF))
+        pipe.send_msg(reply)
+        file_start = time.time()
+        file_size = blocks
+    elif code == MSG_CODE_SENDBLOCK:
+        current_fd.seek(CPM_BLOCK_SIZE * data1)
+        length = CPM_BLOCK_SIZE * data2
+        data = current_fd.read(length)
+        if len(data) < length:
+            data = data + (chr(26) * (length - len(data))) # pad with Ctrl-Z
+        reply = struct.pack("<H", MSG_MAGIC) + data
+        pipe.send_msg(reply)
+        crc = zlib.crc32(data, crc) & 0xFFFFFFFF # update our CRC
+    elif code == MSG_CODE_SENDCRC:
+        reply = struct.pack("<HI", MSG_MAGIC, crc)
+        pipe.send_msg(reply)
+        print "Sent CRC %08x" % crc
+    elif code == MSG_CODE_FILEDONE:
+        taken = time.time() - file_start
+        print "Sent %s in %.1f seconds (%.1fKB/sec)" % (files_to_send[current_file], taken, (CPM_BLOCK_SIZE * file_size / 1024.0) / taken)
+        if data1 == 1:
+            current_file+=1
