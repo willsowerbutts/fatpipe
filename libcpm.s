@@ -10,6 +10,8 @@
     .globl _cpm_f_write_random
     .globl _cpm_f_getsize
     .globl _cpm_abort
+    .globl _putchar
+    .globl _getchar
 
     .area _CODE
 
@@ -194,3 +196,37 @@ _cpm_f_write_random:
 
     pop ix
     ret
+
+; putchar routine for CP/M
+_putchar:
+    ld hl,#2
+    add hl,sp
+
+    push hl
+    ld e,(hl)
+    ld c,#2
+    call 5
+    pop hl
+
+    ; we even handle CRLF correctly
+    ld a, (hl)
+    cp #10
+    ret nz
+    ld e, #13
+    ld c, #2
+    call 5
+
+    ret
+
+; getchar routine for CP/M
+_getchar:
+    ld c, #1
+    call 5
+    ; returns A=L=character read
+    cp #26 ; check for ctrl-Z
+    jr z, goteof
+    ld h, #0
+    ret ; return character in HL
+goteof:
+    ld hl, #0xffff
+    ret ; return EOF
