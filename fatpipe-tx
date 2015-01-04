@@ -44,6 +44,11 @@ def make_cpm_filename(filename):
 current_file = 0
 pipe = FatPipe("/dev/ttyUSB1", 576000)
 files_to_send = sys.argv[1:]
+once_only = '--once' in files_to_send
+if once_only:
+    files_to_send.remove('--once')
+
+print "fatpipe-tx: Waiting for receiver ..."
 
 while 1:
     code, data1, data2 = pipe.receive_msg()
@@ -72,6 +77,8 @@ while 1:
         pipe.send_msg(reply)
         file_start = time.time()
         file_size = blocks
+        if cpm_filename == '' and once_only:
+            sys.exit(0)
     elif code == MSG_CODE_SENDBLOCK:
         current_fd.seek(CPM_BLOCK_SIZE * data1)
         length = CPM_BLOCK_SIZE * data2
